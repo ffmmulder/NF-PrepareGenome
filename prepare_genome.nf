@@ -1,20 +1,9 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl=2
 
-/* Example
-pipeline="/hpc/ubec/tools/pipelines/dev/NF-PrepareGenome/"
-genome_path="/hpc/ubec/resources/genomes/GRCh38_GCA_000001405.15_no_alt/"
-/hpc/ubec/tools/nextflow/21.04.3.5560/nextflow run ${pipeline}/prepare_genome.nf --genome_fasta ${genome_path}/Sequence/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna --out_dir . -profile slurm --work ./work -c  ${pipeline}/config/nf_manual.config --star_path /hpc/ubec/resources/tools/star/2.7.3a/GRCh38_GCA_000001405.15_no_alt_ncbigtf --annotation ${genome_path}/Annotation/GRCh38_latest_genomic.gtf 
-
-/hpc/ubec/tools/nextflow/21.04.3.5560/nextflow run /hpc/ubec/tools/pipelines/dev/NF-PrepareGenome/prepare_genome.nf --genome_fasta genome.fa --out_dir . -profile slurm --work ./work -c /hpc/ubec/tools/pipelines/dev/NF-PrepareGenome/config/nf_manual.config --bwa true --intervalList true --len true --dict true
-*/
-
 /*===========================================================
                         Prepare Genome
 ===========================================================
-#### Homepage / Documentation
-
-----------------------------------------------------------------------------------------
 */
 def helpMessage() {
     // Log colors ANSI codes
@@ -66,6 +55,15 @@ if(params.help){
   exit 0
 }
 
+if ( !params.nextflow_modules_path ){
+  println "No NextflowModules path specified, assumging './NextflowModules'. Otherwise please specify it using --nextflow_modules_path or by setting it in the nextflow.config file"
+  params.nextflow_modules_path = './NextflowModules'
+  Channel
+        .fromPath( params.nextflow_modules_path, checkIfExists: true )
+        .ifEmpty { exit 1, "NextflowModules path not found: ${params.nextflow_modules_path}"}    
+  
+}
+
 if ( !params.genome_fasta){
   exit 1, "Please provide a 'genome_fasta'. You can provide these parameters either in the <analysis_name>.config file or on the commandline (add -- in front of the parameter)."
 }
@@ -81,13 +79,6 @@ if( params.star ){
     //if (!params.star_path){
     //    exit 1, "No 'star_path' parameter passed. Required when running STAR genome generation and needs to be passed on the command line (--star) because of the order in which the flow is processed..."
     //}
-    //if (params.star_path.charAt(0) != '/'){
-    //    print "Please make sure a full starpath is specified! (/path/to/star)... Otherwise it will be placed in the working directory (NOT the specified output directory if any)."
-    //}
-} else {
-  //  if (params.star_path){
-  //      print "star_path specified, overriding star being set to false..."
-  //  }
 }
 
 
@@ -99,54 +90,56 @@ workflow {
     genome_fasta = Channel
         .fromPath( params.genome_fasta, checkIfExists: true )
         .ifEmpty { exit 1, "FASTA file not found: ${params.genome_fasta}"}    
-
-   genome_index = Channel
-        .fromPath( params.genome_fasta+".fai", checkIfExists: true )
-        .ifEmpty { 
-            println "No "+params.genome_fasta+".fai exists, generating one..."
-            include { Faidx } from './NextflowModules/Samtools/1.10/Faidx.nf' params( params )
-            Faidx( genome_fasta, "", "")
-            genome_index = Faidx.out.genome_faidx
-        }    
+   
+    if( !file(params.genome_fasta+".fai").exists() || params.fai )
+    {
+       if (! params.fai ){
+           println params.genome_fasta+".fai not found, creating!"
+       }
+       include { Faidx } from params.nextflowmodules_path+'/Samtools/1.10/Faidx.nf' params( params )
+       Faidx( genome_fasta )
+       genome_index = Faidx.out.genome_faidx
+    }   
 
     if ( params.chr_files ){
-        include { CreateChrFiles } from './NextflowModules/Utils/CreateChrFiles.nf' params( params )
+        include { CreateChrFiles } from params.nextflowmodules_path+'//Utils/CreateChrFiles.nf' params( params )
         CreateChrFiles( genome_fasta )
     }
     if ( params.len ){
-        include { CreateLen } from './NextflowModules/Utils/CreateLen.nf' params( params )
+//        include { CreateLen } from './NextflowModules/Utils/CreateLen.nf' params( params )
+        include { CreateLen } from params.nextflowmodules_path+'/Utils/CreateLen.nf' params( params )
         CreateLen( genome_index )
 	genome_len = CreateLen.out.genome_len
     }
 
     if ( params.dict ){
-        include { CreateSequenceDictionary } from './NextflowModules/Picard/2.22.0/CreateSequenceDictionary.nf' params( params )
+        include { CreateSequenceDictionary } from params.nextflowmodules_path+'/Picard/2.22.0/CreateSequenceDictionary.nf' params( params )
         CreateSequenceDictionary( genome_fasta )
         genome_dict = CreateSequenceDictionary.out.genome_dict
     }
 
     if ( params.bed ){
-        include { CreateBed } from './NextflowModules/Utils/CreateBed.nf' params( params )
+        include { CreateBed } from params.nextflowmodules_path+'/Utils/CreateBed.nf' params( params )
         CreateBed( genome_index)
 	genome_bed = CreateBed.out.genome_bed
     }
 
     if ( params.intervalList ){
-        include { CreateIntervalList } from './NextflowModules/Utils/CreateIntervaList.nf' params( params )
+        include { CreateIntervalList } from params.nextflowmodules_path+'/Utils/CreateIntervaList.nf' params( params )
         CreateIntervalList( genome_index, genome_dict)
 	genome_interval_list = CreateIntervalList.out.genome_interval_list
     }
 
     //if ( params.star_path ){
     if ( params.star ){
-        include { GenomeGenerate } from './NextflowModules/STAR/2.7.3a/GenomeGenerate.nf' params( params : "$params")    
+        include { GenomeGenerate } from params.nextflowmodules_path+'//STAR/2.7.3a/GenomeGenerate.nf' params( params : "$params")    
 
         gtf_file = Channel
             .fromPath( params.annotation, checkIfExists: true )
             .ifEmpty { exit 1, "Annotation file not found: ${params.genome_fasta}"}  
 
         if ( "gff".equals(params.annotation.split("\\.")[-1]) ){
-            include { ConvertGffToGtf } from './NextflowModules/AGAT/0.8.1/ConvertGffToGtf.nf' params( params )
+            include { ConvertGffToGtf } from params.nextflowmodules_path+'//AGAT/0.8.1/ConvertGffToGtf.nf' params( params )
             ConvertGffToGtf( gtf_file )
             GenomeGenerate ( genome_fasta, ConvertGffToGtf.out.gtf )
         } else {         
@@ -155,8 +148,53 @@ workflow {
     }
 
     if ( params.bwa ){
-        include { Index } from './NextflowModules/BWA/0.7.17/Index.nf' params(optional: "${params.bwaindex.optional}", genome_fasta : "${params.genome_fasta}")
+        include { Index } from params.nextflowmodules_path+'//BWA/0.7.17/Index.nf' params(optional: "${params.bwaindex.optional}", genome_fasta : "${params.genome_fasta}")
         Index(genome_fasta)
     }    
 
+    // Create log files: Repository versions and Workflow params
+    VersionLog()
+    Workflow_ExportParams()
+}
+
+// Workflow completion notification
+workflow.onComplete {
+    // HTML Template
+    def template = new File("$baseDir/assets/workflow_complete.html")
+    def binding = [
+        runName: run_name,
+        workflow: workflow
+    ]
+    def engine = new groovy.text.GStringTemplateEngine()
+    def email_html = engine.createTemplate(template).make(binding).toString()
+
+    // Send email
+    if (workflow.success) {
+        def subject = "Deeplexicon Workflow Successful: ${run_name}"
+        sendMail(to: params.email.trim(), subject: subject, body: email_html)
+    } else {
+        def subject = "Deeplexicon Workflow Failed: ${run_name}"
+        sendMail(to: params.email.trim(), subject: subject, body: email_html)
+    }
+}
+
+//from other pipeline, modify for this
+process VersionLog {
+    // Custom process to log repository versions
+    tag {"VersionLog ${analysis_id}"}
+    label 'VersionLog'
+    shell = ['/bin/bash', '-eo', 'pipefail']
+    cache = false  //Disable cache to force a new version log when restarting the workflow.
+
+    output:
+        path('repository_version.log', emit: log_file)
+
+    script:
+        """
+        echo 'PrepareGenome' > repository_version.log
+        git --git-dir=${workflow.projectDir}/.git log --pretty=oneline --decorate -n 2 >> repository_version.log
+
+        echo 'NextflowModules' >> repository_version.log
+        git --git-dir=${params.nextflowmodules_path}/.git log --pretty=oneline --decorate -n 2 >> repository_version.log
+        """
 }
