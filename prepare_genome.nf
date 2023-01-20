@@ -55,12 +55,12 @@ if(params.help){
   exit 0
 }
 
-if ( !params.nextflow_modules_path ){
-  println "No NextflowModules path specified, assumging './NextflowModules'. Otherwise please specify it using --nextflow_modules_path or by setting it in the nextflow.config file"
-  params.nextflow_modules_path = './NextflowModules'
+if ( !params.nextflowmodules_path ){
+  println "No NextflowModules path specified, assumging './NextflowModules'. Otherwise please specify it using --nextflowmodules_path or by setting it in the nextflow.config file"
+  params.nextflowmodules_path = './NextflowModules'
   Channel
-        .fromPath( params.nextflow_modules_path, checkIfExists: true )
-        .ifEmpty { exit 1, "NextflowModules path not found: ${params.nextflow_modules_path}"}    
+        .fromPath( params.nextflowmodules_path, checkIfExists: true )
+        .ifEmpty { exit 1, "NextflowModules path not found: ${params.nextflowmodules_path}"}    
   
 }
 
@@ -81,65 +81,78 @@ if( params.star ){
     //}
 }
 
+include { Faidx } from params.nextflowmodules_path+'/Samtools/1.10/Faidx.nf' params( params )
+include { CreateChrFiles } from params.nextflowmodules_path+'//Utils/CreateChrFiles.nf' params( params )
+include { CreateLen } from params.nextflowmodules_path+'/Utils/CreateLen.nf' params( params )
+include { CreateBed } from params.nextflowmodules_path+'/Utils/CreateBed.nf' params( params )
+include { CreateIntervalList } from params.nextflowmodules_path+'/Utils/CreateIntervaList.nf' params( params )
+include { Index } from params.nextflowmodules_path+'/BWA/0.7.17/Index.nf' params(optional: "${params.bwaindex.optional}", genome_fasta : "${params.genome_fasta}")
+include { ConvertGffToGtf } from params.nextflowmodules_path+'/AGAT/0.8.1/ConvertGffToGtf.nf' params( params )
+
+if( params.pipeline_version != "dev" ){
+    params.nexflowmodules_path="/hpc/ubec/tools/pipelines/NF-IAP/NextflowModules"
+    include { CreateSequenceDictionary } from params.nextflowmodules_path+'/Picard/2.22.0/CreateSequenceDictionary.nf' params( params )
+    include { GenomeGenerate } from params.nextflowmodules_path+'/STAR/2.7.3a/GenomeGenerate.nf' params( params : "$params")    
+} else {
+    include { CreateSequenceDictionary } from params.nextflowmodules_path+'/Picard/2.27.5/CreateSequenceDictionary.nf' params( params )
+    include { GenomeGenerate } from params.nextflowmodules_path+'/STAR/2.7.10b/GenomeGenerate.nf' params( params : "$params")    
+}
 
 /*=================================
           Run workflow
 =================================*/
+def run_name = "PrepareGenome"
+
 workflow {
   main :
     genome_fasta = Channel
         .fromPath( params.genome_fasta, checkIfExists: true )
         .ifEmpty { exit 1, "FASTA file not found: ${params.genome_fasta}"}    
    
+    //run_name = "GenerateGenome: "+params.genome_fasta.simpleName
+
     if( !file(params.genome_fasta+".fai").exists() || params.fai )
     {
-       if (! params.fai ){
-           println params.genome_fasta+".fai not found, creating!"
-       }
-       include { Faidx } from params.nextflowmodules_path+'/Samtools/1.10/Faidx.nf' params( params )
-       Faidx( genome_fasta )
-       genome_index = Faidx.out.genome_faidx
+        if (! params.fai ){
+            println params.genome_fasta+".fai not found, creating!"
+        }
+        Faidx( genome_fasta )
+        genome_index = Faidx.out.genome_faidx
     }   
 
     if ( params.chr_files ){
-        include { CreateChrFiles } from params.nextflowmodules_path+'//Utils/CreateChrFiles.nf' params( params )
         CreateChrFiles( genome_fasta )
     }
     if ( params.len ){
 //        include { CreateLen } from './NextflowModules/Utils/CreateLen.nf' params( params )
-        include { CreateLen } from params.nextflowmodules_path+'/Utils/CreateLen.nf' params( params )
         CreateLen( genome_index )
 	genome_len = CreateLen.out.genome_len
     }
 
     if ( params.dict ){
-        include { CreateSequenceDictionary } from params.nextflowmodules_path+'/Picard/2.22.0/CreateSequenceDictionary.nf' params( params )
         CreateSequenceDictionary( genome_fasta )
         genome_dict = CreateSequenceDictionary.out.genome_dict
     }
 
     if ( params.bed ){
-        include { CreateBed } from params.nextflowmodules_path+'/Utils/CreateBed.nf' params( params )
         CreateBed( genome_index)
 	genome_bed = CreateBed.out.genome_bed
     }
 
     if ( params.intervalList ){
-        include { CreateIntervalList } from params.nextflowmodules_path+'/Utils/CreateIntervaList.nf' params( params )
         CreateIntervalList( genome_index, genome_dict)
 	genome_interval_list = CreateIntervalList.out.genome_interval_list
     }
 
     //if ( params.star_path ){
     if ( params.star ){
-        include { GenomeGenerate } from params.nextflowmodules_path+'//STAR/2.7.3a/GenomeGenerate.nf' params( params : "$params")    
+        //include { GenomeGenerate } from params.nextflowmodules_path+'//STAR/2.7.3a/GenomeGenerate.nf' params( params : "$params")    
 
         gtf_file = Channel
             .fromPath( params.annotation, checkIfExists: true )
             .ifEmpty { exit 1, "Annotation file not found: ${params.genome_fasta}"}  
 
         if ( "gff".equals(params.annotation.split("\\.")[-1]) ){
-            include { ConvertGffToGtf } from params.nextflowmodules_path+'//AGAT/0.8.1/ConvertGffToGtf.nf' params( params )
             ConvertGffToGtf( gtf_file )
             GenomeGenerate ( genome_fasta, ConvertGffToGtf.out.gtf )
         } else {         
@@ -148,13 +161,12 @@ workflow {
     }
 
     if ( params.bwa ){
-        include { Index } from params.nextflowmodules_path+'//BWA/0.7.17/Index.nf' params(optional: "${params.bwaindex.optional}", genome_fasta : "${params.genome_fasta}")
         Index(genome_fasta)
     }    
 
     // Create log files: Repository versions and Workflow params
     VersionLog()
-    Workflow_ExportParams()
+   // Workflow_ExportParams()
 }
 
 // Workflow completion notification
@@ -162,7 +174,7 @@ workflow.onComplete {
     // HTML Template
     def template = new File("$baseDir/assets/workflow_complete.html")
     def binding = [
-        runName: run_name,
+        run_name: run_name,
         workflow: workflow
     ]
     def engine = new groovy.text.GStringTemplateEngine()
