@@ -89,13 +89,14 @@ include { CreateIntervalList } from params.nextflowmodules_path+'/Utils/CreateIn
 include { Index } from params.nextflowmodules_path+'/BWA/0.7.17/Index.nf' params(optional: "${params.bwaindex.optional}", genome_fasta : "${params.genome_fasta}")
 include { ConvertGffToGtf } from params.nextflowmodules_path+'/AGAT/0.8.1/ConvertGffToGtf.nf' params( params )
 
-if( params.pipeline_version != "dev" ){
+//if( params.pipeline_version != "dev" ){
+if( params.dev ){
+    include { CreateSequenceDictionary } from params.nextflowmodules_path+'/Picard/2.27.5/CreateSequenceDictionary.nf' params( params )
+    include { GenomeGenerate } from params.nextflowmodules_path+'/STAR/2.7.10b/GenomeGenerate.nf' params( params : "$params")    
+} else {
     params.nexflowmodules_path="/hpc/ubec/tools/pipelines/NF-IAP/NextflowModules"
     include { CreateSequenceDictionary } from params.nextflowmodules_path+'/Picard/2.22.0/CreateSequenceDictionary.nf' params( params )
     include { GenomeGenerate } from params.nextflowmodules_path+'/STAR/2.7.3a/GenomeGenerate.nf' params( params : "$params")    
-} else {
-    include { CreateSequenceDictionary } from params.nextflowmodules_path+'/Picard/2.27.5/CreateSequenceDictionary.nf' params( params )
-    include { GenomeGenerate } from params.nextflowmodules_path+'/STAR/2.7.10b/GenomeGenerate.nf' params( params : "$params")    
 }
 
 /*=================================
@@ -171,6 +172,7 @@ workflow {
 
 // Workflow completion notification
 workflow.onComplete {
+    if ( params.email ){
     // HTML Template
     def template = new File("$baseDir/assets/workflow_complete.html")
     def binding = [
@@ -182,11 +184,12 @@ workflow.onComplete {
 
     // Send email
     if (workflow.success) {
-        def subject = "Deeplexicon Workflow Successful: ${run_name}"
+        def subject = "PrepareGenome Workflow Successful: ${run_name}"
         sendMail(to: params.email.trim(), subject: subject, body: email_html)
     } else {
-        def subject = "Deeplexicon Workflow Failed: ${run_name}"
+        def subject = "PrepareGenome Workflow Failed: ${run_name}"
         sendMail(to: params.email.trim(), subject: subject, body: email_html)
+    }
     }
 }
 
